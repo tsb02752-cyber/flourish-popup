@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>지역 월별 대출 TOP10</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif; margin: 14px; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .meta { color:#444; font-size:12px; margin-top:6px; }
+    .card { border:1px solid #e6e6e6; border-radius:10px; padding:12px; margin-top:10px; }
+    .bars { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+    .barRow { display:grid; grid-template-columns: 36px 1fr 60px; gap:8px; align-items:center; }
+    .bar { height:14px; background:#2b6cb0; border-radius:7px; width:0%; transition: width .25s; }
+    .label { font-size:12px; color:#222; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .rank { font-weight:700; color:#111; text-align:right; font-size:12px; }
+    .cnt { text-align:right; font-variant-numeric: tabular-nums; font-size:12px; color:#111; }
+    select { padding:6px 8px; border-radius:8px; border:1px solid #ccc; }
+    .error { color:#b00020; font-size:12px; white-space:pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <div><b id="title">지역</b></div>
+
+    <label for="monthSelect">월:</label>
+    <select id="monthSelect"></select>
+  </div>
+
+  <div class="meta" id="meta"></div>
+
+  <div class="card">
+    <div><b>TOP 10 막대그래프</b></div>
+    <div class="bars" id="bars"></div>
+  </div>
+
+  <div class="card">
+    <div><b>TOP 10 리스트</b></div>
+    <ol id="list"></ol>
+  </div>
+
+  <div class="error" id="error"></div>
+
+  <script>
+    function getQueryParam(name) {
+      const url = new URL(window.location.href);
+      return url.searchParams.get(name);
+    }
+
+    function makeMonthOptions(startYYYYMM, countMonths) {
+      // startYYYYMM: "2026-01"
+      const [y, m] = startYYYYMM.split("-").map(Number);
+      const out = [];
+      let year = y, month = m;
+      for (let i = 0; i < countMonths; i++) {
+        const mm = String(month).padStart(2, "0");
+        out.push(`${year}-${mm}`);
+        month++;
+        if (month === 13) { month = 1; year++; }
+      }
+      return out;
+    }
+
+    async function fetchJSON(url) {
+      const r = await fetch(url, { headers: { "Accept": "application/json" } });
+      if (!r.ok) throw new Error(`HTTP ${r.status} - ${await r.text()}`);
+      return r.json();
+    }
+
+    function render(data) {
+      const { region, month, items, updatedAt, source } = data;
+
+      document.getElementById("title").textContent = `지역코드 ${region} · ${month}`;
+      document.getElementById("meta").textContent = `업데이트: ${updatedAt} · source: ${source}`;
+
+      // list
+      const ol = document.getElementById("list");
+      ol.innerHTML = "";
+      for (const it of items) {
+        const li = document.createElement("li");
+        li.textContent = `${it.title} / ${it.authors || ""} / ${it.publisher || ""} (대출 ${it.loanCnt})`;
+        ol.appendChild(li);
+      }
+
+      // bars
+      const max = Math.max(...items.map(x => x.loanCnt), 1);
+      const bars = document.getElementById("bars");
+      bars.innerHTML = "";
+      for (const it of items) {
+        const row = document.createElement("div");
+        row.className = "barRow";
+
+        const rank = document.createElement("div");
+        rank.className = "rank";
+        rank.textContent = it.rank;
+
+        const mid = document.createElement("div");
+        const label = document.createElement("div");
+        label.className = "label";
+        label.title = it.title;
+        label.textContent = it.title;
+
+        const bar = document.createElement("div");
+        bar.className = "bar";
+        bar.style.width = `${Math.round((it.loanCnt / max) * 100)}%`;
+
+        mid.appendChild(label);
+        mid.appendChild(bar);
+
+        const cnt = document.createElement("div");
+        cnt.className = "cnt";
+        cnt.textContent = it.loanCnt;
+
+        row.appendChild(rank);
+        row.appendChild(mid);
+        row.appendChild(cnt);
+        bars.appendChild(row);
+      }
+    }
+
+    async function load() {
+      const errorEl = document.getElementById("error");
+      errorEl.textContent = "";
+
+      const region = getQueryParam("region") || "46"; // region이 없으면 테스트용 46
+      const monthSelect = document.getElementById("monthSelect");
+
+      // 드롭다운: 2026-01부터 12개월 (원하면 24개월로 늘릴 수 있음)
+      const months = makeMonthOptions("2026-01", 12);
+      monthSelect.innerHTML = months.map(m => `<option value="${m}">${m}</option>`).join("");
+
+      // URL에 month가 오면 그걸 기본값으로
+      const urlMonth = getQueryParam("month");
+      if (urlMonth && months.includes(urlMonth)) monthSelect.value = urlMonth;
+
+      async function refresh() {
+        try {
+          errorEl.textContent = "";
+          const month = monthSelect.value;
+          const data = await fetchJSON(`/api/bestsellers?region=${encodeURIComponent(region)}&month=${encodeURIComponent(month)}`);
+          render(data);
+        } catch (e) {
+          errorEl.textContent = String(e);
+        }
+      }
+
+      monthSelect.addEventListener("change", refresh);
+      await refresh();
+    }
+
+    load();
+  </script>
+</body>
+</html>
