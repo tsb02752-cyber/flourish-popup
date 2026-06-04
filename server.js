@@ -1,8 +1,6 @@
 /**
  * server.js - Flourish 클릭 지역별 + 월별(2026) 대출 Top10
- * - /popup?region={{name}}&month={{month}}
- * - /api/bestsellers?region=서울특별시&month=5  (또는 05)
- * - /debug/check?region=강원도&month=5   (응답/데이터 유무 점검)
+ * (간단 B) 0건이면 무조건 "데이터 준비 중" 표시
  *
  * deps:
  *   npm i express cors fast-xml-parser
@@ -75,7 +73,6 @@ const REGION_CODE_KR = {
 
   경북: "37",
   경상북도: "37",
-  걍북: "37",
 
   경남: "38",
   경상남도: "38",
@@ -182,7 +179,7 @@ app.get("/api/bestsellers", async (req, res) => {
   }
 });
 
-/** Popup HTML (월 드롭다운 포함) */
+/** Popup HTML (0건이면 무조건 '데이터 준비 중') */
 app.get("/popup", (req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
 
@@ -204,7 +201,6 @@ app.get("/popup", (req, res) => {
     .book { font-size: 13px; font-weight: 700; margin: 0 0 6px; line-height: 1.35; }
     .meta { font-size: 12px; opacity: 0.75; line-height: 1.35; }
     .msg { border: 1px dashed #cfcfcf; border-radius: 10px; padding: 14px 12px; background: #fafafa; }
-    .err { border: 1px solid #ffd0d0; background: #fff5f5; }
   </style>
 </head>
 <body>
@@ -244,8 +240,8 @@ app.get("/popup", (req, res) => {
       const initialMonth = toMonthInt(monthRaw) || 1;
       monthSel.value = String(initialMonth);
 
-      function renderError(html) {
-        contentEl.innerHTML = '<div class="msg err">' + html + '</div>';
+      function renderMsg(html) {
+        contentEl.innerHTML = '<div class="msg">' + html + '</div>';
       }
 
       async function load() {
@@ -254,29 +250,35 @@ app.get("/popup", (req, res) => {
         if (!region) {
           titleEl.textContent = "지역 미지정";
           subEl.textContent = "";
-          renderError("<strong>region 파라미터가 없습니다.</strong><br/>예: /popup?region=서울특별시&month=5");
+          renderMsg("<strong>region 파라미터가 없습니다.</strong><br/>예: /popup?region=서울특별시&month=5");
           return;
         }
 
         titleEl.textContent = region + " · 2026년 " + m + "월 대출 Top10";
         subEl.textContent = "데이터 출처: data4library.kr (loanItemSrch)";
 
-        contentEl.innerHTML = '<div class="msg">불러오는 중...</div>';
+        renderMsg("불러오는 중...");
 
         try {
           const r = await fetch("/api/bestsellers?region=" + encodeURIComponent(region) + "&month=" + encodeURIComponent(m));
           const data = await r.json();
 
           if (data.status !== "ok") {
-            renderError("<strong>데이터 오류</strong><br/>" + (data.error || "unknown"));
+            renderMsg("<strong>데이터 오류</strong><br/>" + (data.error || "unknown"));
             return;
           }
 
           subEl.textContent = "기간: " + data.startDt + " ~ " + data.endDt + " · region=" + data.regionCode;
 
           const items = data.items || [];
+
+          // (간단 B) 0건이면 무조건 "데이터 준비 중"
           if (!items.length) {
-            contentEl.innerHTML = '<div class="msg">결과가 없습니다.</div>';
+            renderMsg(
+              "<strong>데이터 준비 중</strong><br/>" +
+              "현재 선택한 기간의 대출 데이터가 API에서 제공되지 않습니다.<br/>" +
+              "다른 월을 선택해 주세요."
+            );
             return;
           }
 
@@ -290,7 +292,7 @@ app.get("/popup", (req, res) => {
             );
           }).join("");
         } catch (e) {
-          renderError("<strong>통신 오류</strong><br/>" + String(e));
+          renderMsg("<strong>통신 오류</strong><br/>" + String(e));
         }
       }
 
@@ -302,55 +304,6 @@ app.get("/popup", (req, res) => {
 </html>`);
 });
 
-/** DEBUG: api 응답/데이터 유무 점검 (반드시 / 보다 위에 둠) */
-app.get("/debug/check", async (req, res) => {
-  try {
-    const regionName = normalizeRegionName(req.query.region);
-    const monthInt = toMonthInt(req.query.month);
-
-    if (!regionName) return res.status(400).json({ error: "missing region" });
-    if (!monthInt) return res.status(400).json({ error: "invalid month (1..12)" });
-
-    const regionCode = REGION_CODE_KR[regionName];
-    if (!regionCode) return res.status(400).json({ error: "unknown region", regionName });
-
-    const { startDt, endDt } = getMonthRange(YEAR_FIXED, monthInt);
-
-    const authKey = process.env.DATA4LIBRARY_AUTH_KEY;
-    const apiUrl =
-      `http://data4library.kr/api/loanItemSrch` +
-      `?authKey=${encodeURIComponent(authKey)}` +
-      `&startDt=${encodeURIComponent(startDt)}` +
-      `&endDt=${encodeURIComponent(endDt)}` +
-      `&region=${encodeURIComponent(regionCode)}` +
-      `&pageNo=1&pageSize=10`;
-
-    const r = await fetch(apiUrl);
-    const xml = await r.text();
-    const parsed = parser.parse(xml);
-
-    const resultNum = parsed?.response?.resultNum ?? null;
-    const resultMsg = parsed?.response?.resultMsg ?? null;
-
-    const docsRaw = parsed?.response?.docs?.doc || [];
-    const docs = Array.isArray(docsRaw) ? docsRaw : docsRaw ? [docsRaw] : [];
-
-    return res.json({
-      regionName,
-      regionCode,
-      month: monthInt,
-      startDt,
-      endDt,
-      resultNum,
-      resultMsg,
-      docsCount: docs.length,
-      apiUrl,
-    });
-  } catch (e) {
-    return res.status(500).json({ error: String(e) });
-  }
-});
-
 /** Home */
 app.get("/", (req, res) => {
   res.json({
@@ -358,7 +311,6 @@ app.get("/", (req, res) => {
     endpoints: [
       "/popup?region=서울특별시&month=5",
       "/api/bestsellers?region=서울특별시&month=5",
-      "/debug/check?region=강원도&month=5",
     ],
     yearFixed: YEAR_FIXED,
   });
