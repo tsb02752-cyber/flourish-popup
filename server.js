@@ -28,7 +28,7 @@ const REGION_CODE_KR = {
   "제주도": "50",
 };
 
-// ---- KST 기준 월 계산 유틸 (추가) ----
+// ---- KST 기준 월 계산 유틸 ----
 function getKstNow() {
   // KST = UTC+9
   return new Date(Date.now() + 9 * 60 * 60 * 1000);
@@ -65,14 +65,17 @@ function toISODate(y, m, d) {
 function monthRange(yyyymm) {
   const p = parseYYYYMM(yyyymm);
   if (!p) return null;
+
   const { y, m } = p;
   const startDt = toISODate(y, m, 1);
-  let ny = y,
-    nm = m + 1;
+
+  let ny = y;
+  let nm = m + 1;
   if (nm === 13) {
     nm = 1;
     ny = y + 1;
   }
+
   const endDt = toISODate(ny, nm, 1); // 다음달 1일
   return { startDt, endDt };
 }
@@ -86,7 +89,7 @@ app.get("/popup", (req, res) => {
  * 호출 예:
  *   /api/bestsellers?region=서울특별시&month=2026-05
  *
- * 정책(요청 반영):
+ * 정책:
  * - month가 없으면 '지난달'로 자동 처리
  * - '지난달까지만 제공': 이번달 이상(이번달/미래)이면 not_ready 메시지 반환
  * - 기준 시각: 한국시간(KST)
@@ -94,11 +97,11 @@ app.get("/popup", (req, res) => {
 app.get("/api/bestsellers", async (req, res) => {
   try {
     const regionName = String(req.query.region || "").trim();
-
-    // month는 선택값: 없으면 지난달로 자동 세팅
     let month = String(req.query.month || "").trim(); // YYYY-MM
 
-    if (!regionName) return res.status(400).json({ error: "region is required" });
+    if (!regionName) {
+      return res.status(400).json({ error: "region is required" });
+    }
 
     // KST 기준 이번달/지난달 계산
     const kstNow = getKstNow();
@@ -108,14 +111,18 @@ app.get("/api/bestsellers", async (req, res) => {
     if (!month) month = lastMonth;
 
     const range = monthRange(month);
-    if (!range) return res.status(400).json({ error: "month format invalid (YYYY-MM)" });
+    if (!range) {
+      return res.status(400).json({ error: "month format invalid (YYYY-MM)" });
+    }
 
     const regionCode = REGION_CODE_KR[regionName];
     if (!regionCode) {
       return res.status(400).json({
         error: "unknown region name",
-        received: regionName,
-        hint: "REGION_CODE_KR에 있는 한글 시도명과 Flourish 값이 100% 일치해야 합니다.",
+        receivedRegion: regionName,
+        receivedMonth: month || null,
+        hint: "REGION_CODE_KR 키(한글 시도명)와 100% 일치해야 합니다.",
+        availableExamples: Object.keys(REGION_CODE_KR).slice(0, 8),
       });
     }
 
@@ -151,7 +158,9 @@ app.get("/api/bestsellers", async (req, res) => {
     const apiRes = await fetch(apiUrl, {
       headers: { Accept: "application/xml,text/xml,*/*" },
     });
+
     const xml = await apiRes.text();
+
     if (!apiRes.ok) {
       return res.status(502).json({
         error: "upstream error",
@@ -177,7 +186,7 @@ app.get("/api/bestsellers", async (req, res) => {
       loanCnt: Number(d.loan_count ?? 0),
       kdcName: d.class_nm ?? "",
       bookImageURL: String(d.bookImageURL ?? "").trim(),
-      bookDtlUrl: String(d.bookDtlUrl ?? "").trim(), // 앞 공백 제거
+      bookDtlUrl: String(d.bookDtlUrl ?? "").trim(),
     }));
 
     return res.json({
@@ -191,26 +200,12 @@ app.get("/api/bestsellers", async (req, res) => {
       source: "data4library.loanItemSrch",
     });
   } catch (e) {
-    return res.status(500).json({ error: "server error", message: e?.message || String(e) });
+    return res.status(500).json({
+      error: "server error",
+      message: e?.message || String(e),
+    });
   }
 });
 
 const port = process.env.PORT || 3000;
-
-const regionCode = REGION_CODE_KR[regionName];
-if (!regionCode) {
-  return res.status(400).json({
-    error: "unknown region name",
-    receivedRegion: regionName,
-    receivedMonth: month || null,
-    hint: "REGION_CODE_KR 키(한글 시도명)와 100% 일치해야 합니다.",
-    availableExamples: Object.keys(REGION_CODE_KR).slice(0, 8),
-  });
-}
-
-
 app.listen(port, () => console.log(`Server listening on ${port}`));
-
-
-}
-
