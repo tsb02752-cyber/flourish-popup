@@ -197,3 +197,13 @@ app.get("/api/bestsellers", async (req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Server listening on ${port}`));
+
+if (!regionCode) {
+  return res.status(400).json({
+    error: "unknown region name",
+    receivedRegion: regionName,
+    receivedMonth: month,
+    availableExamples: Object.keys(REGION_CODE_KR).slice(0, 5),
+  });
+}
+
