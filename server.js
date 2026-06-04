@@ -276,7 +276,7 @@ app.get("/popup", (req, res) => {
           if (!items.length) {
             renderMsg(
               "<strong>데이터 준비 중</strong><br/>" +
-              "현재 선택한 기간의 대출 데이터가 API에서 제공되지 않습니다.<br/>" +
+              "현재 선택한 기간의 대출 데이터 준비중입니다.<br/>" +
               "다른 월을 선택해 주세요."
             );
             return;
