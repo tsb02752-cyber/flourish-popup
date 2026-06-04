@@ -2,6 +2,7 @@
  * server.js - Flourish 클릭 지역별 + 월별(2026) 대출 Top10
  * - /popup?region={{name}}&month={{month}}
  * - /api/bestsellers?region=서울특별시&month=5  (또는 05)
+ * - /debug/check?region=강원도&month=5   (응답/데이터 유무 점검)
  *
  * deps:
  *   npm i express cors fast-xml-parser
@@ -28,60 +29,60 @@ const parser = new XMLParser({
 const YEAR_FIXED = 2026;
 
 const REGION_CODE_KR = {
-  "서울": "11",
-  "서울특별시": "11",
+  서울: "11",
+  서울특별시: "11",
 
-  "부산": "21",
-  "부산광역시": "21",
+  부산: "21",
+  부산광역시: "21",
 
-  "대구": "22",
-  "대구광역시": "22",
+  대구: "22",
+  대구광역시: "22",
 
-  "인천": "23",
-  "인천광역시": "23",
+  인천: "23",
+  인천광역시: "23",
 
-  "광주": "24",
-  "광주광역시": "24",
+  광주: "24",
+  광주광역시: "24",
 
-  "대전": "25",
-  "대전광역시": "25",
+  대전: "25",
+  대전광역시: "25",
 
-  "울산": "26",
-  "울산광역시": "26",
+  울산: "26",
+  울산광역시: "26",
 
-  "세종": "29",
-  "세종특별자치시": "29",
+  세종: "29",
+  세종특별자치시: "29",
 
-  "경기": "31",
-  "경기도": "31",
+  경기: "31",
+  경기도: "31",
 
-  "강원": "32",
-  "강원도": "32",
-  "강원특별자치도": "32",
+  강원: "32",
+  강원도: "32",
+  강원특별자치도: "32",
 
-  "충북": "33",
-  "충청북도": "33",
+  충북: "33",
+  충청북도: "33",
 
-  "충남": "34",
-  "충청남도": "34",
+  충남: "34",
+  충청남도: "34",
 
-  "전북": "35",
-  "전라북도": "35",
-  "전북특별자치도": "35",
+  전북: "35",
+  전라북도: "35",
+  전북특별자치도: "35",
 
-  "전남": "36",
-  "전라남도": "36",
+  전남: "36",
+  전라남도: "36",
 
-  "경북": "37",
-  "경상북도": "37",
-  "걍북": "37",
+  경북: "37",
+  경상북도: "37",
+  걍북: "37",
 
-  "경남": "38",
-  "경상남도": "38",
+  경남: "38",
+  경상남도: "38",
 
-  "제주": "39",
-  "제주도": "39",
-  "제주특별자치도": "39",
+  제주: "39",
+  제주도: "39",
+  제주특별자치도: "39",
 };
 
 function normalizeRegionName(s) {
@@ -101,10 +102,7 @@ function pad2(n) {
 }
 
 function getMonthRange(yyyy, m) {
-  // JS Date: month is 0-based
-  const start = new Date(Date.UTC(yyyy, m - 1, 1));
-  const end = new Date(Date.UTC(yyyy, m, 0)); // last day of month
-
+  const end = new Date(Date.UTC(yyyy, m, 0)); // last day of month (m is 1..12)
   const startDt = `${yyyy}-${pad2(m)}-01`;
   const endDt = `${yyyy}-${pad2(m)}-${pad2(end.getUTCDate())}`;
   return { startDt, endDt };
@@ -304,25 +302,14 @@ app.get("/popup", (req, res) => {
 </html>`);
 });
 
-app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    endpoints: [
-      "/popup?region=서울특별시&month=5",
-      "/api/bestsellers?region=서울특별시&month=5",
-    ],
-    yearFixed: YEAR_FIXED,
-  });
-});
+/** DEBUG: api 응답/데이터 유무 점검 (반드시 / 보다 위에 둠) */
 app.get("/debug/check", async (req, res) => {
   try {
-    const regionName = String(req.query.region || "").trim();
-    const monthInt = Number(String(req.query.month || "").trim());
+    const regionName = normalizeRegionName(req.query.region);
+    const monthInt = toMonthInt(req.query.month);
 
     if (!regionName) return res.status(400).json({ error: "missing region" });
-    if (!Number.isInteger(monthInt) || monthInt < 1 || monthInt > 12) {
-      return res.status(400).json({ error: "invalid month (1..12)" });
-    }
+    if (!monthInt) return res.status(400).json({ error: "invalid month (1..12)" });
 
     const regionCode = REGION_CODE_KR[regionName];
     if (!regionCode) return res.status(400).json({ error: "unknown region", regionName });
@@ -357,10 +344,24 @@ app.get("/debug/check", async (req, res) => {
       resultNum,
       resultMsg,
       docsCount: docs.length,
+      apiUrl,
     });
   } catch (e) {
     return res.status(500).json({ error: String(e) });
   }
+});
+
+/** Home */
+app.get("/", (req, res) => {
+  res.json({
+    ok: true,
+    endpoints: [
+      "/popup?region=서울특별시&month=5",
+      "/api/bestsellers?region=서울특별시&month=5",
+      "/debug/check?region=강원도&month=5",
+    ],
+    yearFixed: YEAR_FIXED,
+  });
 });
 
 app.listen(PORT, () => console.log("Server running on", PORT));
