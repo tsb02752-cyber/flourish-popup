@@ -70,7 +70,11 @@
     function render(data) {
       const { region, month, items, updatedAt, source } = data;
 
-      document.getElementById("title").textContent = `지역코드 ${region} · ${month}`;
+      // ✅ 여기 1줄이 핵심 변경점입니다.
+      // (기존) document.getElementById("title").textContent = `지역코드 ${region} · ${month}`;
+      // (변경) region을 '지역명'으로 표시
+      document.getElementById("title").textContent = `${region} · ${month}`;
+
       document.getElementById("meta").textContent = `업데이트: ${updatedAt} · source: ${source}`;
 
       // list
@@ -122,7 +126,8 @@
       const errorEl = document.getElementById("error");
       errorEl.textContent = "";
 
-      const region = getQueryParam("region") || "46"; // region이 없으면 테스트용 46
+      // ✅ 여기서 region은 Flourish에서 ?region=서울특별시 처럼 넘어옵니다.
+      const region = getQueryParam("region") || "전라남도"; // region이 없으면 테스트용
       const monthSelect = document.getElementById("monthSelect");
 
       // 드롭다운: 2026-01부터 12개월 (원하면 24개월로 늘릴 수 있음)
@@ -137,6 +142,8 @@
         try {
           errorEl.textContent = "";
           const month = monthSelect.value;
+
+          // 서버 API 호출 (실데이터/샘플 공통 인터페이스)
           const data = await fetchJSON(`/api/bestsellers?region=${encodeURIComponent(region)}&month=${encodeURIComponent(month)}`);
           render(data);
         } catch (e) {
