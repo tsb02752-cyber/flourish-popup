@@ -1,16 +1,14 @@
 /**
- * server.js (Full paste)
- * - Express proxy for Data4Library loanItemSrch
- * - 2026년 고정, 월별(1~12)
- * - KST 기준 "지난달까지"만 조회 허용 (그 이후: status=not_ready, message="공개 예정")
- * - Flourish popup: /popup?region={{name}}&month={{month}}
+ * server.js - Flourish 클릭 지역별(시/도) 2026 연간 Top10
+ * - /popup?region={{name}} 로 호출되면, 내부에서 region명을 코드로 매핑해 API 호출
  *
- * Required ENV:
- * - DATA4LIBRARY_AUTH_KEY=xxxxxxxxxxxxxxxx
- *
- * Install deps:
+ * deps:
  *   npm i express cors fast-xml-parser
- * Node 18+ recommended (global fetch available).
+ * run:
+ *   node server.js
+ *
+ * env:
+ *   DATA4LIBRARY_AUTH_KEY=발급키
  */
 
 const express = require("express");
@@ -22,208 +20,177 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-/** =========================
- *  1) Region code dictionary
- *  - keys MUST match Flourish {{name}} exactly (Label/Name)
- *  ========================= */
-const REGION_CODE_KR = {
-  "서울특별시": "11",
-  "부산광역시": "21",
-  "대구광역시": "22",
-  "인천광역시": "23",
-  "광주광역시": "24",
-  "대전광역시": "25",
-  "울산광역시": "26",
-  "세종특별자치시": "29",
-  "경기도": "31",
-  "강원특별자치도": "32", // (구 강원도)
-  "충청북도": "33",
-  "충청남도": "34",
-  "전라남도": "36",
-  "전북특별자치도": "35", // (구 전라북도)
-  "경상북도": "37",
-  "경상남도": "38",
-  "제주특별자치도": "39",
-};
-
-/** =========================
- *  2) Utilities (KST / dates)
- *  ========================= */
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
-function getKstNow() {
-  // Convert "now" to a Date object that represents KST time (by shifting milliseconds)
-  const now = new Date();
-  return new Date(now.getTime() + 9 * 60 * 60 * 1000);
-}
-
-/**
- * KST 기준 "이번 달"은 아직 집계 미완료로 보고, "지난달(YYYY-MM)"까지만 조회 가능
- * e.g., 2026-06-04(KST) -> lastReady = "2026-05"
- */
-function getLastReadyYyyyMm() {
-  const kst = getKstNow();
-  const y = kst.getUTCFullYear();
-  const m = kst.getUTCMonth() + 1; // 1..12 (KST shifted, read via UTC getters)
-
-  let yy = y;
-  let mm = m - 1;
-  if (mm === 0) {
-    yy -= 1;
-    mm = 12;
-  }
-  return `${yy}-${pad2(mm)}`;
-}
-
-/**
- * Given yyyyMm like "2026-05" -> {startDt:"2026-05-01", endDt:"2026-05-31"}
- */
-function monthRangeFromYyyyMm(yyyyMm) {
-  const [y, m] = yyyyMm.split("-").map(Number);
-  const startDt = `${y}-${pad2(m)}-01`;
-
-  // last day of month: Date.UTC(y, m, 0) where m is 1..12 -> next month "0th day"
-  const end = new Date(Date.UTC(y, m, 0));
-  const endDt = `${y}-${pad2(m)}-${pad2(end.getUTCDate())}`;
-
-  return { startDt, endDt };
-}
-
-/** =========================
- *  3) XML Parser
- *  ========================= */
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   trimValues: true,
 });
 
-/** =========================
- *  4) API: /api/bestsellers
- *  - region: Korean name (e.g., "서울특별시")
- *  - month: 1..12
- *  - year is fixed to 2026
- *  ========================= */
+const YEAR_FIXED = 2026;
+const START_DT = `${YEAR_FIXED}-01-01`;
+const END_DT = `${YEAR_FIXED}-12-31`;
+
+/**
+ * Flourish의 {{name}}(시도명)가 어떤 문자열로 들어오는지에 따라
+ * 키를 더 추가/수정해야 합니다.
+ *
+ * - "강원"은 보통 "강원특별자치도"로 들어올 수 있음
+ * - "경북" 오타: 사용자가 "걍북"이라고 적었는데 실제는 "경상북도"/"경북"
+ * - "세종"은 "세종특별자치시"
+ */
+const REGION_CODE_KR = {
+  // 특별/광역시
+  "서울": "11",
+  "서울특별시": "11",
+
+  "부산": "21",
+  "부산광역시": "21",
+
+  "대구": "22",
+  "대구광역시": "22",
+
+  "인천": "23",
+  "인천광역시": "23",
+
+  "광주": "24",
+  "광주광역시": "24",
+
+  "대전": "25",
+  "대전광역시": "25",
+
+  "울산": "26",
+  "울산광역시": "26",
+
+  "세종": "29",
+  "세종특별자치시": "29",
+
+  // 도
+  "경기": "31",
+  "경기도": "31",
+
+  "강원": "32",
+  "강원도": "32",
+  "강원특별자치도": "32",
+
+  "충북": "33",
+  "충청북도": "33",
+
+  "충남": "34",
+  "충청남도": "34",
+
+  "전북": "35",
+  "전라북도": "35",
+  "전북특별자치도": "35",
+
+  "전남": "36",
+  "전라남도": "36",
+
+  "경북": "37",
+  "경상북도": "37",
+  "걍북": "37", // 혹시 Flourish 데이터에 오타가 섞였을 경우 안전장치
+
+  "경남": "38",
+  "경상남도": "38",
+
+  "제주": "39",
+  "제주도": "39",
+  "제주특별자치도": "39",
+};
+
+function normalizeRegionName(s) {
+  return String(s || "").trim();
+}
+
+/** API 호출 (지역코드 필수) */
+async function fetchLoanTop10ByRegionCode(regionCode) {
+  const authKey = process.env.DATA4LIBRARY_AUTH_KEY;
+  if (!authKey) throw new Error("missing DATA4LIBRARY_AUTH_KEY");
+
+  const apiUrl =
+    `http://data4library.kr/api/loanItemSrch` +
+    `?authKey=${encodeURIComponent(authKey)}` +
+    `&startDt=${encodeURIComponent(START_DT)}` +
+    `&endDt=${encodeURIComponent(END_DT)}` +
+    `&region=${encodeURIComponent(regionCode)}` +
+    `&pageNo=1&pageSize=10`;
+
+  const r = await fetch(apiUrl);
+  const xml = await r.text();
+  const parsed = parser.parse(xml);
+
+  // docs.doc가 단일 객체/배열 모두 가능
+  const docsRaw = parsed?.response?.docs?.doc || [];
+  const docs = Array.isArray(docsRaw) ? docsRaw : docsRaw ? [docsRaw] : [];
+
+  return docs.map((d, idx) => ({
+    rank: idx + 1,
+    bookname: d.bookname ?? "",
+    authors: d.authors ?? "",
+    publisher: d.publisher ?? "",
+    publication_year: d.publication_year ?? "",
+    isbn13: d.isbn13 ?? "",
+    loan_count: d.loan_count ?? "",
+    // 필요시 사용
+    bookImageURL: d.bookImageURL ?? "",
+    bookDtlUrl: d.bookDtlUrl ?? "",
+  }));
+}
+
+/** JSON API: Flourish/디버깅용 */
 app.get("/api/bestsellers", async (req, res) => {
   try {
-    const regionName = String(req.query.region || "").trim();
-    const monthRaw = String(req.query.month || "").trim();
+    const regionName = normalizeRegionName(req.query.region);
+    const regionCode = REGION_CODE_KR[regionName];
 
     if (!regionName) {
-      return res.status(400).json({ error: "region is required" });
+      return res.status(400).json({
+        status: "error",
+        error: "missing region query",
+        hint: "use /api/bestsellers?region=서울특별시",
+      });
     }
 
-    const regionCode = REGION_CODE_KR[regionName];
     if (!regionCode) {
       return res.status(400).json({
-        error: "unknown region",
+        status: "error",
+        error: "unknown region name",
         receivedRegion: regionName,
-        hint: "Flourish {{name}} must exactly match a key in REGION_CODE_KR",
+        hint: "REGION_CODE_KR에 Flourish의 실제 {{name}} 문자열을 추가하세요.",
       });
     }
 
-    const monthNum = Number(monthRaw);
-    if (!Number.isInteger(monthNum) || monthNum < 1 || monthNum > 12) {
-      return res.status(400).json({
-        error: "month must be integer 1~12",
-        receivedMonth: monthRaw,
-      });
-    }
+    const items = await fetchLoanTop10ByRegionCode(regionCode);
 
-    const YEAR_FIXED = 2026;
-    const yyyyMm = `${YEAR_FIXED}-${pad2(monthNum)}`;
-
-    const lastReady = getLastReadyYyyyMm();
-
-    // If requested month is later than lastReady -> not_ready
-    if (yyyyMm > lastReady) {
-      return res.status(200).json({
-        status: "not_ready",
-        message: "공개 예정",
-        region: regionName,
-        regionCode,
-        yyyyMm,
-        lastReady,
-        items: [],
-      });
-    }
-
-    const { startDt, endDt } = monthRangeFromYyyyMm(yyyyMm);
-
-    const authKey = process.env.DATA4LIBRARY_AUTH_KEY;
-    if (!authKey) {
-      return res.status(500).json({ error: "missing DATA4LIBRARY_AUTH_KEY" });
-    }
-
-    const apiUrl =
-      `http://data4library.kr/api/loanItemSrch` +
-      `?authKey=${encodeURIComponent(authKey)}` +
-      `&startDt=${encodeURIComponent(startDt)}` +
-      `&endDt=${encodeURIComponent(endDt)}` +
-      `&region=${encodeURIComponent(regionCode)}` +
-      `&pageNo=1&pageSize=10`;
-
-    const r = await fetch(apiUrl);
-    const xml = await r.text();
-
-    const parsed = parser.parse(xml);
-
-    // Data4Library typical structure:
-    // response -> docs -> doc (array or object)
-    const docsRaw = parsed?.response?.docs?.doc || [];
-    const docs = Array.isArray(docsRaw) ? docsRaw : docsRaw ? [docsRaw] : [];
-
-    const items = docs.map((d, idx) => ({
-      rank: idx + 1,
-      bookname: d.bookname ?? "",
-      authors: d.authors ?? "",
-      publisher: d.publisher ?? "",
-      publication_year: d.publication_year ?? "",
-      isbn13: d.isbn13 ?? "",
-      loan_count: d.loan_count ?? "",
-      bookImageURL: d.bookImageURL ?? "",
-      bookDtlUrl: d.bookDtlUrl ?? "",
-    }));
-
-    return res.status(200).json({
+    return res.json({
       status: "ok",
-      region: regionName,
+      yearFixed: YEAR_FIXED,
+      startDt: START_DT,
+      endDt: END_DT,
+      regionName,
       regionCode,
-      yyyyMm,
-      startDt,
-      endDt,
       items,
     });
   } catch (e) {
-    return res.status(500).json({
-      error: "server error",
-      detail: String(e),
-    });
+    return res.status(500).json({ status: "error", error: String(e) });
   }
 });
 
-/** =========================
- *  5) Popup page: /popup
- *  - expects query: region, month
- *  - fetches /api/bestsellers and renders list or "공개 예정"
- *  ========================= */
+/** Popup HTML: Flourish에서 iframe으로 넣는 페이지 */
 app.get("/popup", (req, res) => {
-  // Minimal HTML (inline CSS/JS) for Flourish iframe
   res.setHeader("Content-Type", "text/html; charset=utf-8");
+
   res.send(`<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>월별 대출 Top10</title>
+  <title>지역별 대출 Top10</title>
   <style>
     body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", Arial, sans-serif; }
     .wrap { padding: 12px 14px; }
-    .title { font-size: 15px; font-weight: 700; margin: 0 0 10px; }
-    .sub { font-size: 12px; opacity: 0.7; margin: 0 0 12px; }
-    .card { border: 1px solid #e6e6e6; border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
+    .title { font-size: 15px; font-weight: 800; margin: 0 0 8px; }
+    .sub { font-size: 12px; opacity: .7; margin: 0 0 12px; }
+    .card { border: 1px solid #e8e8e8; border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
     .book { font-size: 13px; font-weight: 700; margin: 0 0 6px; line-height: 1.35; }
     .meta { font-size: 12px; opacity: 0.75; line-height: 1.35; }
     .msg { border: 1px dashed #cfcfcf; border-radius: 10px; padding: 14px 12px; background: #fafafa; }
@@ -232,8 +199,8 @@ app.get("/popup", (req, res) => {
 </head>
 <body>
   <div class="wrap">
-    <h1 class="title" id="title">불러오는 중...</h1>
-    <p class="sub" id="sub"></p>
+    <div class="title" id="title">불러오는 중...</div>
+    <div class="sub" id="sub"></div>
     <div id="content"></div>
   </div>
 
@@ -241,51 +208,43 @@ app.get("/popup", (req, res) => {
     (function () {
       const params = new URLSearchParams(location.search);
       const region = (params.get("region") || "").trim();
-      const month = (params.get("month") || "").trim();
 
       const titleEl = document.getElementById("title");
       const subEl = document.getElementById("sub");
       const contentEl = document.getElementById("content");
 
-      if (!region || !month) {
-        titleEl.textContent = "잘못된 요청";
-        contentEl.innerHTML = '<div class="msg err">region / month 파라미터가 필요합니다.</div>';
+      titleEl.textContent = (region || "지역 미지정") + " · 2026 연간 대출 Top10";
+      subEl.textContent = "기간: ${START_DT} ~ ${END_DT}";
+
+      if (!region) {
+        contentEl.innerHTML = '<div class="msg err"><strong>region 파라미터가 없습니다.</strong><br/>예: /popup?region=서울특별시</div>';
         return;
       }
 
-      titleEl.textContent = region + " - 2026년 " + month + "월 대출 Top10";
-      subEl.textContent = "기준: KST 지난달까지 공개 (이번달~미래월: 공개 예정)";
-
-      const url = "/api/bestsellers?region=" + encodeURIComponent(region) + "&month=" + encodeURIComponent(month);
-
-      fetch(url)
+      fetch("/api/bestsellers?region=" + encodeURIComponent(region))
         .then(r => r.json())
         .then(data => {
-          if (data.status === "not_ready") {
-            contentEl.innerHTML = '<div class="msg"><strong>' + (data.message || "공개 예정") + '</strong></div>';
-            return;
-          }
-
           if (data.status !== "ok") {
-            contentEl.innerHTML = '<div class="msg err"><strong>데이터를 불러오지 못했습니다.</strong></div>';
+            contentEl.innerHTML =
+              '<div class="msg err"><strong>데이터 오류</strong><br/>' +
+              (data.error ? String(data.error) : "unknown") +
+              (data.receivedRegion ? "<br/>received: " + data.receivedRegion : "") +
+              "</div>";
             return;
           }
 
-          if (!data.items || data.items.length === 0) {
+          const items = data.items || [];
+          if (!items.length) {
             contentEl.innerHTML = '<div class="msg">결과가 없습니다.</div>';
             return;
           }
 
-          const html = data.items.map(item => {
-            const metaParts = [];
-            if (item.authors) metaParts.push(item.authors);
-            if (item.publisher) metaParts.push(item.publisher);
-            if (item.publication_year) metaParts.push(item.publication_year);
-
+          const html = items.map(item => {
+            const meta = [item.authors, item.publisher, item.publication_year].filter(Boolean).join(" · ");
             return (
               '<div class="card">' +
                 '<div class="book">' + item.rank + ". " + (item.bookname || "") + '</div>' +
-                '<div class="meta">' + metaParts.join(" · ") + '</div>' +
+                '<div class="meta">' + meta + '</div>' +
               '</div>'
             );
           }).join("");
@@ -293,7 +252,7 @@ app.get("/popup", (req, res) => {
           contentEl.innerHTML = html;
         })
         .catch(err => {
-          contentEl.innerHTML = '<div class="msg err"><strong>오류가 발생했습니다.</strong></div>';
+          contentEl.innerHTML = '<div class="msg err"><strong>통신 오류</strong><br/>' + String(err) + '</div>';
         });
     })();
   </script>
@@ -301,19 +260,18 @@ app.get("/popup", (req, res) => {
 </html>`);
 });
 
-/** =========================
- *  6) Health check
- *  ========================= */
+/** Health */
 app.get("/", (req, res) => {
   res.json({
     ok: true,
-    service: "data4library-proxy",
-    endpoints: ["/popup?region=서울특별시&month=5", "/api/bestsellers?region=서울특별시&month=5"],
-    yearFixed: 2026,
-    lastReadyExample: getLastReadyYyyyMm(),
+    endpoints: [
+      "/popup?region=서울특별시",
+      "/api/bestsellers?region=서울특별시",
+    ],
+    yearFixed: YEAR_FIXED,
+    startDt: START_DT,
+    endDt: END_DT,
   });
 });
 
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
-});
+app.listen(PORT, () => console.log("Server running on", PORT));
