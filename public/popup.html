@@ -48,7 +48,6 @@
     }
 
     function makeMonthOptions(startYYYYMM, countMonths) {
-      // startYYYYMM: "2026-01"
       const [y, m] = startYYYYMM.split("-").map(Number);
       const out = [];
       let year = y, month = m;
@@ -70,10 +69,8 @@
     function render(data) {
       const { region, month, items, updatedAt, source } = data;
 
-      // ✅ 여기 1줄이 핵심 변경점입니다.
-      // (기존) document.getElementById("title").textContent = `지역코드 ${region} · ${month}`;
-      // (변경) region을 '지역명'으로 표시
-      document.getElementById("title").textContent = `${region} · ${month}`;
+      // ✅ 제목을 더 예쁘게 표시
+      document.getElementById("title").textContent = `${region} 지역 · ${month} 대출 TOP10`;
 
       document.getElementById("meta").textContent = `업데이트: ${updatedAt} · source: ${source}`;
 
@@ -126,15 +123,12 @@
       const errorEl = document.getElementById("error");
       errorEl.textContent = "";
 
-      // ✅ 여기서 region은 Flourish에서 ?region=서울특별시 처럼 넘어옵니다.
-      const region = getQueryParam("region") || "전라남도"; // region이 없으면 테스트용
+      const region = getQueryParam("region") || "전라남도"; // 테스트용 기본값
       const monthSelect = document.getElementById("monthSelect");
 
-      // 드롭다운: 2026-01부터 12개월 (원하면 24개월로 늘릴 수 있음)
       const months = makeMonthOptions("2026-01", 12);
       monthSelect.innerHTML = months.map(m => `<option value="${m}">${m}</option>`).join("");
 
-      // URL에 month가 오면 그걸 기본값으로
       const urlMonth = getQueryParam("month");
       if (urlMonth && months.includes(urlMonth)) monthSelect.value = urlMonth;
 
@@ -142,8 +136,6 @@
         try {
           errorEl.textContent = "";
           const month = monthSelect.value;
-
-          // 서버 API 호출 (실데이터/샘플 공통 인터페이스)
           const data = await fetchJSON(`/api/bestsellers?region=${encodeURIComponent(region)}&month=${encodeURIComponent(month)}`);
           render(data);
         } catch (e) {
