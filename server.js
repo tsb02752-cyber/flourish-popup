@@ -314,5 +314,53 @@ app.get("/", (req, res) => {
     yearFixed: YEAR_FIXED,
   });
 });
+app.get("/debug/check", async (req, res) => {
+  try {
+    const regionName = String(req.query.region || "").trim();
+    const monthInt = Number(String(req.query.month || "").trim());
+
+    if (!regionName) return res.status(400).json({ error: "missing region" });
+    if (!Number.isInteger(monthInt) || monthInt < 1 || monthInt > 12) {
+      return res.status(400).json({ error: "invalid month (1..12)" });
+    }
+
+    const regionCode = REGION_CODE_KR[regionName];
+    if (!regionCode) return res.status(400).json({ error: "unknown region", regionName });
+
+    const { startDt, endDt } = getMonthRange(YEAR_FIXED, monthInt);
+
+    const authKey = process.env.DATA4LIBRARY_AUTH_KEY;
+    const apiUrl =
+      `http://data4library.kr/api/loanItemSrch` +
+      `?authKey=${encodeURIComponent(authKey)}` +
+      `&startDt=${encodeURIComponent(startDt)}` +
+      `&endDt=${encodeURIComponent(endDt)}` +
+      `&region=${encodeURIComponent(regionCode)}` +
+      `&pageNo=1&pageSize=10`;
+
+    const r = await fetch(apiUrl);
+    const xml = await r.text();
+    const parsed = parser.parse(xml);
+
+    const resultNum = parsed?.response?.resultNum ?? null;
+    const resultMsg = parsed?.response?.resultMsg ?? null;
+
+    const docsRaw = parsed?.response?.docs?.doc || [];
+    const docs = Array.isArray(docsRaw) ? docsRaw : docsRaw ? [docsRaw] : [];
+
+    return res.json({
+      regionName,
+      regionCode,
+      month: monthInt,
+      startDt,
+      endDt,
+      resultNum,
+      resultMsg,
+      docsCount: docs.length,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: String(e) });
+  }
+});
 
 app.listen(PORT, () => console.log("Server running on", PORT));
