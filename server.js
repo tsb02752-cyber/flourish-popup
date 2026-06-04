@@ -196,14 +196,21 @@ app.get("/api/bestsellers", async (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Server listening on ${port}`));
 
+const regionCode = REGION_CODE_KR[regionName];
 if (!regionCode) {
   return res.status(400).json({
     error: "unknown region name",
     receivedRegion: regionName,
-    receivedMonth: month,
-    availableExamples: Object.keys(REGION_CODE_KR).slice(0, 5),
+    receivedMonth: month || null,
+    hint: "REGION_CODE_KR 키(한글 시도명)와 100% 일치해야 합니다.",
+    availableExamples: Object.keys(REGION_CODE_KR).slice(0, 8),
   });
+}
+
+
+app.listen(port, () => console.log(`Server listening on ${port}`));
+
+
 }
 
