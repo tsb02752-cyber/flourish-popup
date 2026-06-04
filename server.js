@@ -1,9 +1,7 @@
 /**
- * server.js - 지역별 + (2026) 월별 Top10 전체(히트맵/막대용)
- *
- * 추가 엔드포인트:
- *   /api/monthly-top10?region=서울특별시
- *     -> 2026년 1~12월 Top10을 long format으로 반환 (최대 120 rows)
+ * server.js - Flourish 클릭 지역별 + 월별(2026) 대출 Top10
+ * - /popup?region={{name}}&month={{month}}
+ * - /api/bestsellers?region=서울특별시&month=5  (또는 05)
  *
  * deps:
  *   npm i express cors fast-xml-parser
@@ -90,13 +88,23 @@ function normalizeRegionName(s) {
   return String(s || "").trim();
 }
 
+function toMonthInt(monthRaw) {
+  const s = String(monthRaw || "").trim();
+  if (!s) return null;
+  const m = Number(s);
+  if (!Number.isInteger(m) || m < 1 || m > 12) return null;
+  return m;
+}
+
 function pad2(n) {
   return String(n).padStart(2, "0");
 }
 
 function getMonthRange(yyyy, m) {
-  // month: 1..12
+  // JS Date: month is 0-based
+  const start = new Date(Date.UTC(yyyy, m - 1, 1));
   const end = new Date(Date.UTC(yyyy, m, 0)); // last day of month
+
   const startDt = `${yyyy}-${pad2(m)}-01`;
   const endDt = `${yyyy}-${pad2(m)}-${pad2(end.getUTCDate())}`;
   return { startDt, endDt };
@@ -128,23 +136,24 @@ async function fetchLoanTop10(regionCode, startDt, endDt) {
     publisher: d.publisher ?? "",
     publication_year: d.publication_year ?? "",
     isbn13: d.isbn13 ?? "",
-    loan_count: Number(d.loan_count ?? 0) || 0,
+    loan_count: d.loan_count ?? "",
   }));
 }
 
-/**
- * (NEW) 월별 Top10 전체: long format rows
- * - 행 단위: (region, month, rank, bookname, loan_count, ...)
- * - Flourish 히트맵/막대에 바로 쓰기 좋음
- */
-app.get("/api/monthly-top10", async (req, res) => {
+/** JSON API */
+app.get("/api/bestsellers", async (req, res) => {
   try {
     const regionName = normalizeRegionName(req.query.region);
+    const monthInt = toMonthInt(req.query.month);
+
     if (!regionName) {
+      return res.status(400).json({ status: "error", error: "missing region" });
+    }
+    if (!monthInt) {
       return res.status(400).json({
         status: "error",
-        error: "missing region",
-        hint: "/api/monthly-top10?region=서울특별시",
+        error: "missing/invalid month",
+        hint: "month=1..12 (or 01..12)",
       });
     }
 
@@ -157,63 +166,7 @@ app.get("/api/monthly-top10", async (req, res) => {
       });
     }
 
-    const rows = [];
-    for (let m = 1; m <= 12; m++) {
-      const { startDt, endDt } = getMonthRange(YEAR_FIXED, m);
-      const items = await fetchLoanTop10(regionCode, startDt, endDt);
-
-      // 월별 Top10 -> 10행으로 펼치기
-      for (const it of items) {
-        rows.push({
-          year: YEAR_FIXED,
-          month: m, // 숫자형 월(1..12)
-          month_label: `${m}월`, // Flourish 표시용
-          region_name: regionName,
-          region_code: regionCode,
-
-          rank: it.rank, // 1..10
-          bookname: it.bookname,
-          authors: it.authors,
-          publisher: it.publisher,
-          publication_year: it.publication_year,
-          isbn13: it.isbn13,
-          loan_count: it.loan_count,
-        });
-      }
-
-      // 어떤 달은 자료가 비거나 10권 미만일 수도 있음(그대로 둠)
-    }
-
-    return res.json({
-      status: "ok",
-      regionName,
-      regionCode,
-      yearFixed: YEAR_FIXED,
-      rowCount: rows.length,
-      rows,
-    });
-  } catch (e) {
-    return res.status(500).json({ status: "error", error: String(e) });
-  }
-});
-
-/** (기존) 단일 월 Top10 (팝업/테스트용) */
-app.get("/api/bestsellers", async (req, res) => {
-  try {
-    const regionName = normalizeRegionName(req.query.region);
-    const month = Number(String(req.query.month || "").trim());
-
-    if (!regionName) return res.status(400).json({ status: "error", error: "missing region" });
-    if (!Number.isInteger(month) || month < 1 || month > 12) {
-      return res.status(400).json({ status: "error", error: "invalid month (1..12)" });
-    }
-
-    const regionCode = REGION_CODE_KR[regionName];
-    if (!regionCode) {
-      return res.status(400).json({ status: "error", error: "unknown region name", receivedRegion: regionName });
-    }
-
-    const { startDt, endDt } = getMonthRange(YEAR_FIXED, month);
+    const { startDt, endDt } = getMonthRange(YEAR_FIXED, monthInt);
     const items = await fetchLoanTop10(regionCode, startDt, endDt);
 
     return res.json({
@@ -221,7 +174,7 @@ app.get("/api/bestsellers", async (req, res) => {
       yearFixed: YEAR_FIXED,
       regionName,
       regionCode,
-      month,
+      month: monthInt,
       startDt,
       endDt,
       items,
@@ -231,14 +184,134 @@ app.get("/api/bestsellers", async (req, res) => {
   }
 });
 
-/** 간단 홈 */
+/** Popup HTML (월 드롭다운 포함) */
+app.get("/popup", (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+
+  res.send(`<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>월별 최다대출도서</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", Arial, sans-serif; }
+    .wrap { padding: 12px 14px; }
+    .top { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .title { font-size: 15px; font-weight: 800; margin: 0; }
+    .controls { display: flex; gap: 8px; align-items: center; }
+    select { font-size: 12px; padding: 6px 8px; border-radius: 8px; border: 1px solid #ddd; }
+    .sub { font-size: 12px; opacity: .7; margin: 0 0 12px; }
+    .card { border: 1px solid #e8e8e8; border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
+    .book { font-size: 13px; font-weight: 700; margin: 0 0 6px; line-height: 1.35; }
+    .meta { font-size: 12px; opacity: 0.75; line-height: 1.35; }
+    .msg { border: 1px dashed #cfcfcf; border-radius: 10px; padding: 14px 12px; background: #fafafa; }
+    .err { border: 1px solid #ffd0d0; background: #fff5f5; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <h1 class="title" id="title">불러오는 중...</h1>
+      <div class="controls">
+        <select id="monthSel" aria-label="month">
+          ${Array.from({ length: 12 }, (_, i) => {
+            const m = i + 1;
+            return `<option value="${m}">${m}월</option>`;
+          }).join("")}
+        </select>
+      </div>
+    </div>
+    <p class="sub" id="sub"></p>
+    <div id="content"></div>
+  </div>
+
+  <script>
+    (function () {
+      const params = new URLSearchParams(location.search);
+      const region = (params.get("region") || "").trim();
+      const monthRaw = (params.get("month") || "").trim();
+
+      const titleEl = document.getElementById("title");
+      const subEl = document.getElementById("sub");
+      const contentEl = document.getElementById("content");
+      const monthSel = document.getElementById("monthSel");
+
+      function toMonthInt(s) {
+        const m = Number(String(s || "").trim());
+        if (!Number.isInteger(m) || m < 1 || m > 12) return null;
+        return m;
+      }
+
+      const initialMonth = toMonthInt(monthRaw) || 1;
+      monthSel.value = String(initialMonth);
+
+      function renderError(html) {
+        contentEl.innerHTML = '<div class="msg err">' + html + '</div>';
+      }
+
+      async function load() {
+        const m = Number(monthSel.value);
+
+        if (!region) {
+          titleEl.textContent = "지역 미지정";
+          subEl.textContent = "";
+          renderError("<strong>region 파라미터가 없습니다.</strong><br/>예: /popup?region=서울특별시&month=5");
+          return;
+        }
+
+        titleEl.textContent = region + " · 2026년 " + m + "월 대출 Top10";
+        subEl.textContent = "데이터 출처: data4library.kr (loanItemSrch)";
+
+        contentEl.innerHTML = '<div class="msg">불러오는 중...</div>';
+
+        try {
+          const r = await fetch("/api/bestsellers?region=" + encodeURIComponent(region) + "&month=" + encodeURIComponent(m));
+          const data = await r.json();
+
+          if (data.status !== "ok") {
+            renderError("<strong>데이터 오류</strong><br/>" + (data.error || "unknown"));
+            return;
+          }
+
+          subEl.textContent = "기간: " + data.startDt + " ~ " + data.endDt + " · region=" + data.regionCode;
+
+          const items = data.items || [];
+          if (!items.length) {
+            contentEl.innerHTML = '<div class="msg">결과가 없습니다.</div>';
+            return;
+          }
+
+          contentEl.innerHTML = items.map(item => {
+            const meta = [item.authors, item.publisher, item.publication_year].filter(Boolean).join(" · ");
+            return (
+              '<div class="card">' +
+                '<div class="book">' + item.rank + ". " + (item.bookname || "") + '</div>' +
+                '<div class="meta">' + meta + '</div>' +
+              '</div>'
+            );
+          }).join("");
+        } catch (e) {
+          renderError("<strong>통신 오류</strong><br/>" + String(e));
+        }
+      }
+
+      monthSel.addEventListener("change", load);
+      load();
+    })();
+  </script>
+</body>
+</html>`);
+});
+
 app.get("/", (req, res) => {
   res.json({
     ok: true,
     endpoints: [
-      "/api/monthly-top10?region=서울특별시",
+      "/popup?region=서울특별시&month=5",
       "/api/bestsellers?region=서울특별시&month=5",
     ],
+    yearFixed: YEAR_FIXED,
   });
 });
 
